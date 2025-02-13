@@ -1,0 +1,10 @@
+bowser
+coin
+donkey kong
+luigi
+peach
+power up
+toad
+tree
+wario
+yoshi
