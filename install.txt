@@ -1,0 +1,66 @@
+jupyterlab
+opencv-python
+pyautogui
+pywin32
+onnxruntime
+tensorflow-cpu=2.9.2
+
+Moje pouûitÈ prÌkazy
+Isù do adres·ra D:/AI-ML/AI-ML-Playground.
+VytvorÌ prazdne prostredie venv
+conda create --prefix=venv python=3.10
+VytvorÌ adres·r venv, kde bude prostredie, ktorÈ je definovane v yml s˙bore:
+conda env create --prefix=venv -f environment.yml
+v adres·ri D:/AI-ML/AI-ML-Playground: activate ./venv
+alebo mimo adres·ra: activate D:/AI-ML/AI-ML-Playground/venv
+Vytvorenie, treba mat aktivovane venv:
+conda env export > environment.yml
+Aktualizuje venv zo yml s˙boru:
+conda env update --prefix ./venv --file environment.yml  --prune
+
+Spustiù labelImg:
+labelImg.exe adresar-s-obrazkami subor-s-triedami
+
+Ak nejde jupyter Lab
+python -m ipykernel install --user
+
+Test YOLO7
+python detect.py --weights yolov7.pt --conf 0.4 --img-size 640 --source yourvideo.mp4
+
+Train custom (--device 0 ak je CUDA)
+ python train.py --workers 1 --device 0 --batch-size 8 --epochs 50 --img 256 256 --data data/custom_data.yaml --hyp data/hyp.scratch.custom.yaml --cfg cfg/training/yolov7-custom.yaml --name yolov7-custom --weights yolov7.pt
+
+Pytorch pre YOLO7
+# CUDA 11.3
+conda install pytorch==1.11.0 torchvision==0.12.0 torchaudio==0.11.0 cudatoolkit=11.3 -c pytorch
+
+# CPU Only
+conda install pytorch==1.11.0 torchvision==0.12.0 torchaudio==0.11.0 cpuonly -c pytorch
+
+
+
+...\Lib\site-packages\google\protobuf\internal\builder.py
+
+https://www.youtube.com/watch?v=aOoBUmbOW5A
+https://www.youtube.com/watch?v=zsPLCIAJE5o
+https://www.youtube.com/watch?v=g1yEtXz7UqY
+https://www.twilio.com/blog/how-to-write-lua-scripts-for-video-games-with-the-bizhawk-emulator
+https://github.com/weatherton/BizHawkMarioKart64
+
+Ako spustiù t˙to öar·du:
+v miniconde prompt:
+D:/AI-ML/AI-ML-Playground: activate ./venv
+spustiù IDLE
+Spustiù v Bizhawk adres·ri Lua\BrainHawk-MM\SampleTool.py -ten spustÌ server
+cez .lnk s˙bor alebo inak spustiù to Ëo sa vypÌöe do konzoly (emuhawk a parametre) - to spustÌ bizhawk
+V bizhawku spustiù Sampletool.lua - v bizhawku stlaËit "z" malo by vypÌsaù to konzoly nejake veci
+
+main.py cez cv2
+main-lua.py cez lua server
+
+Aktualizovaù venv
+pip install -r requirements.txt --upgrade
+
+
+
+
