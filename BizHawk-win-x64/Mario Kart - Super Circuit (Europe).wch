@@ -1,0 +1,19 @@
+SystemID GBA
+23B4	b	u	0	IWRAM	Pos (1)
+23C0	b	u	0	IWRAM	Pos (2)
+3570	w	u	0	IWRAM	
+66A4	w	u	0	IWRAM	
+66A6	w	u	0	IWRAM	
+66AA	w	u	0	IWRAM	
+66AC	w	u	0	IWRAM	
+66C2	w	u	0	IWRAM	
+39EE	w	u	0	IWRAM	Waypoint
+3BCE	w	u	0	IWRAM	Waypoint
+3C28	w	1	1	IWRAM	Lap distance
+3C1C	d	u	0	IWRAM	Surface
+3B9C	d	3	0	IWRAM	Pos.Y
+3B98	d	3	0	IWRAM	Pos. X
+3D10	b	u	0	IWRAM	Coins
+3C29	b	u	0	IWRAM	Prejazd ciarou
+3C5F	b	u	0	IWRAM	Lap
+
