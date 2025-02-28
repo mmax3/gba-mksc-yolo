@@ -93,7 +93,7 @@ All scripts automatically launch Bizhawk if its not already running
 ## Resources
 
 - **YOLO Training Scripts:** [Roboflow Notebooks](https://github.com/roboflow/notebooks)
-- **Used Datasets:** [MKS Dataset on Roboflow Universe](https://universe.roboflow.com/mmax/mksc/browse)
+- **Used Datasets:** [MKSC Dataset on Roboflow Universe](https://universe.roboflow.com/mmax/mksc/browse)
 
 
 
