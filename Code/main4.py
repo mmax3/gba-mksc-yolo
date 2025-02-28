@@ -7,8 +7,6 @@ import subprocess
 #from PIL import Image
 from windowcapture import WindowCapture
 
-print("YoloV11 ONNX with framegrabber, openCV(cv2) inference")
-
 def filter_Detections(results, thresh = 0.5):
     # if model is trained on 1 class only
     if len(results[0]) == 5:
@@ -99,10 +97,10 @@ def NMS(boxes, conf_scores, iou_thresh = 0.55):
 
 def rescale_back(results,img_w,img_h):
     cx, cy, w, h, class_id, confidence = results[:,0], results[:,1], results[:,2], results[:,3], results[:,4], results[:,-1]
-    cx = cx/640.0 * img_w
-    cy = cy/640.0 * img_h
-    w = w/640.0 * img_w
-    h = h/640.0 * img_h
+    cx = cx/480.0 * img_w
+    cy = cy/320.0 * img_h
+    w = w/480.0 * img_w
+    h = h/320.0 * img_h
     x1 = cx - w/2
     y1 = cy - h/2
     x2 = cx + w/2
@@ -178,8 +176,8 @@ except:
     wincap=False
 
 if (wincap==False):
-    p=subprocess.Popen([r'..\\BizHawk-win-x64\\EmuHawk.exe',
-                        r'..\\BizHawk-win-x64\\ROMS\\Mario Kart - Super Circuit.gba',
+    p=subprocess.Popen([r'..\\BizHawk-2.9.1-win-x64\\EmuHawk.exe',
+                        r'..\\BizHawk-2.9.1-win-x64\\ROMS\\Mario Kart - Super Circuit.gba',
                         '--load-slot=1'
                         ], )
 
@@ -206,8 +204,6 @@ while(True):
 
     img=screenshot_masked
 
-    # YOLOv11 need RGB image
-    img = cv2.cvtColor(img,cv2.COLOR_BGR2RGB)
     img_height,img_width = img.shape[:2]
 
     # resize image to get the desired size (640,640) for inference
@@ -221,8 +217,6 @@ while(True):
 
     # scale to 0-1
     img = img/255.0
-    
-    #img = cv2.dnn.blobFromImage(screenshot, scalefactor=1 / 255, size=(480, 320), swapRB=True)
     
     # feed the model with processed image
     net.setInput(img)
@@ -246,15 +240,15 @@ while(True):
             # draw the bounding boxes
             color = colors[cls_id]
             cv2.rectangle(screenshot,(int(x1),int(y1)),(int(x2),int(y2)),color,1)
-            cv2.putText(screenshot,class_names[cls_id]+' '+conf,(x1,y1-17),
-                        cv2.FONT_HERSHEY_SIMPLEX,1,color,1)
+            cv2.putText(screenshot,class_names[cls_id]+' '+conf,(x1,y1-3),
+                        cv2.FONT_HERSHEY_SIMPLEX,0.5,color,1)
 
     combined_img=screenshot
 
     fps='{:.0f} fps'.format(1 / (time.time() - loop_time))
     cv2.putText(combined_img, fps, (0, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
     combined_img= cv2.cvtColor(combined_img, cv2.COLOR_BGR2RGB)
-    cv2.imshow('output',screenshot)
+    cv2.imshow('output',combined_img)
     
     # debug the loop rate
     #print('FPS {}'.format(1 / (time.time() - loop_time)))

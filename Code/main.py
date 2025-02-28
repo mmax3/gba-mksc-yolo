@@ -30,8 +30,8 @@ except:
     wincap=False
 
 if (wincap==False):
-    p=subprocess.Popen([r'..\\BizHawk-win-x64\\EmuHawk.exe',
-                        r'..\\BizHawk-win-x64\\ROMS\\Mario Kart - Super Circuit.gba',
+    p=subprocess.Popen([r'..\\BizHawk-2.9.1-win-x64\\EmuHawk.exe',
+                        r'..\\BizHawk-2.9.1-win-x64\\ROMS\\Mario Kart - Super Circuit.gba',
                         '--load-slot=1'
                         ], )
 while (wincap==False):
@@ -40,8 +40,6 @@ while (wincap==False):
     except:
         time.sleep(1.0)
         continue
-
-#nn = cv2.dnn.readNet("yolov11s.onnx") #nefunguje
 
 # initialize the Vision class
 vision = Vision()

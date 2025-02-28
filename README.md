@@ -16,8 +16,8 @@ Check the `requirements.txt` file. For ONNX, if you have an NVIDIA GPU, install 
 ### Step 1: Set Up the Directory Structure
 
 1. Create a directory of your choice, e.g., `AI-ML-Playground`.
-2. Download and extract [BizHawk 2.10](https://tasvideos.org/BizHawk/ReleaseHistory#Bizhawk210) into a new subdirectory `BizHawk-win-x64`.
-3. Place `Mario Kart - Super Circuit.gba` ROM file into `BizHawk-win-x64/ROMs` directory.
+2. Download and extract [BizHawk 2.9.1](https://tasvideos.org/Bizhawk/ReleaseHistory#Bizhawk291) into a new subdirectory `BizHawk-2.9.1-win-x64`.
+3. Place `Mario Kart - Super Circuit.gba` ROM file into `BizHawk-2.9.1-win-x64/ROMs` directory.
 4. Navigate to the `AI-ML-Playground` directory.
 5. Manually copy all contents from this GitHub repository into `AI-ML-Playground` directory, and overwrite some BizHawk files if necessary
 
@@ -52,6 +52,7 @@ pip install -r requirements.txt
 - `windowcapture.py`
 
   - Lines 40, 41, and 42 may need to be adjusted on your PC.
+  These represents size of attributes of BizHawk application window, that need to be ignored by screen grabbing
 
 - `main.py`
 

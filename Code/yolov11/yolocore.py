@@ -65,7 +65,7 @@ class YOLODetector:
         # accordingly how the model was exported/trained
         image = cv2.resize(img_src, (resize_w, resize_h), interpolation=cv2.INTER_LINEAR)
         #yolo needs swapped B and R channels,
-		#but we do not needed, because it is already swapped when it comes here
+	#but we do not needed, because it is already swapped when it comes here
         #image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         image = image.astype(np.float32)
         image /= 255.0

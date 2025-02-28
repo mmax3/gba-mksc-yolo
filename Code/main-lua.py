@@ -144,10 +144,10 @@ except:
     wincap=False
 
 if (wincap==False):
-    p=subprocess.Popen([r'..\\BizHawk-win-x64\EmuHawk.exe', #An 'r' before a string tells the Python interpreter to treat backslashes as a literal (raw) character. Normally, Python uses backslashes as escape characters
-                        #'..\BizHawk-win-x64\ROMS\Mario Kart - Super Circuit.gba', # handled by BHServer and luascript
+    p=subprocess.Popen([r'..\\BizHawk-2.9.1-win-x64\\EmuHawk.exe', #An 'r' before a string tells the Python interpreter to treat backslashes as a literal (raw) character. Normally, Python uses backslashes as escape characters
+                        #'..\BizHawk-2.9.1-win-x64\ROMS\Mario Kart - Super Circuit.gba', # handled by BHServer and luascript
                         #'--load-slot=1', # handled by BHServer and luascript
-                        r'--lua=..\BizHawk-win-x64\Lua\BrainHawk-MM\SampleTool.lua',
+                        r'--lua=..\\BizHawk-2.9.1-win-x64\\Lua\\BrainHawk-MM\\SampleTool.lua',
                         f'--socket_ip={server.ip}',
                         f'--socket_port={server.port}',
                         f'--url_get=http://{server.ip}:9876/get',
