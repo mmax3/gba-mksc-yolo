@@ -219,9 +219,14 @@ class BHServer:
             while True:
                 msg = client_socket.recv(self.BUFSIZE)
                 if not msg: break
-                self.log('Received {}'.format(msg))
+                self.log('Received {}'.format(len(msg) if isinstance(msg, bytes) else msg))
                 self.close_client = False
-                self.handle_msg(msg.decode("utf-8"), client_socket)
+                # Try to decode as UTF-8, but if it fails (binary data), pass bytes
+                try:
+                    msg_str = msg.decode("utf-8")
+                except UnicodeDecodeError:
+                    msg_str = msg  # Keep as bytes for binary data
+                self.handle_msg(msg_str, client_socket)
                 if self.close_client: break
         finally:
             self.log("Client disconnected.")
@@ -317,7 +322,19 @@ class BHServer:
 
     # Handle a message of a list of statements from a client
     def handle_msg(self, msg, client_socket):
-        # NOTE: msg is url-safe. It is NOT decoded unless needed
+        # NOTE: msg is a string (decoded from UTF-8)
+        # BizHawk sends HTTP POST requests with Base64-encoded PNG screenshots
+        
+        # If msg is still bytes, try to decode it
+        if isinstance(msg, bytes):
+            try:
+                msg = msg.decode("utf-8")
+            except UnicodeDecodeError:
+                self.log(f"ERROR: Could not decode message as UTF-8, length: {len(msg)}")
+                return
+        
+        if not isinstance(msg, str):
+            return  # Invalid message type
 
         # * A msg can begin with "UPDATE", "RESET", "GET", "SET", "POST".
         # * Every msg can hold multiple statements separated by '; ' FIXME
@@ -592,7 +609,7 @@ class BHServer:
                     self.close_client = True  # BizHawk expects connection to close after each Lua method call
 
                     # Check the size of the body
-                    match = re.match(".*Content-Length: (\d*).*", stmt, re.S)
+                    match = re.match(r".*Content-Length: (\d*).*", stmt, re.S)
                     cont_len = int(match.group(1))
                     self.log("CONTENT_LENGTH: " + str(cont_len))
 
@@ -601,11 +618,25 @@ class BHServer:
                         # Respond, to get the next message
                         client_socket.send(response.encode("utf-8"))
 
-                        # Receive next message, replace old msg
-                        msg = client_socket.recv(cont_len).decode()
+                        # Receive binary data as bytes
+                        binary_data = b''
+                        while len(binary_data) < cont_len:
+                            chunk = client_socket.recv(cont_len - len(binary_data))
+                            if not chunk:
+                                break
+                            binary_data += chunk
+                        msg = binary_data
+                    
+                    # If msg is bytes, try to decode to string
+                    if isinstance(msg, bytes):
+                        try:
+                            msg = msg.decode("utf-8")
+                        except UnicodeDecodeError:
+                            self.log("ERROR: Could not decode POST body as UTF-8")
+                            continue
 
-                    # Check if message is screenshot
-                    screenshot_idx = msg[0:180].find("screenshot=")
+                    # Check if message is screenshot (Base64 PNG format)
+                    screenshot_idx = msg[0:min(180, len(msg))].find("screenshot=")
 
                     # Is this a screenshot?
                     if screenshot_idx != -1:
@@ -614,8 +645,8 @@ class BHServer:
                         # Receive messages until msg size equals Content-Length
                         while len(screenshot.encode("utf-8")) + 11 < cont_len:
                             # Receive next msg
-                            msg = client_socket.recv(cont_len).decode()
-                            screenshot += msg
+                            recv_msg = client_socket.recv(cont_len).decode()
+                            screenshot += recv_msg
 
                         # Store screenshot as numpy.ndarray (replace if already exists)
                         img = base64.b64decode(unquote_plus(screenshot))  # Using unquote because urlsafe_ doesn't work
@@ -623,14 +654,16 @@ class BHServer:
                         if self.use_grayscale:
                             img = to_grayscale(img)
                         self.screenshots[self.actions] = img
+                        self.log(f"Screenshot stored for action {self.actions}, shape: {img.shape}")
 
                     # Assume this is an HTTP-formatted POST command
                     else:
-                        match = re.match(".*payload=(.*)", msg, re.S)
-                        msg = unquote_plus(match.group(1))
+                            match = re.match(r".*payload=(.*)", msg, re.S)
+                            if match:
+                                msg = unquote_plus(match.group(1))
 
-                        # Re-iterate. handling body as new message
-                        new_msg = True
+                                # Re-iterate. handling body as new message
+                                new_msg = True
 
                 # Did the statement return a response?
                 if returns: response += "; "

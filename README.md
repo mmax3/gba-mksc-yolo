@@ -78,6 +78,11 @@ pip install -r requirements.txt
 
   - Uses OpenCV (`cv2`) for inference.
   - Based on guide: [Using YOLOv8 in ONNX Format](https://medium.com/@zain.18j2000/how-to-use-custom-or-official-yolov8-object-detection-model-in-onnx-format-ca8f055643df).
+
+- `main5.py`
+
+  - Uses a custom-trained YOLO26 model and custom inference code using `onnxruntime`.
+  - Less accurate, slightly faster than Yolov11.
   
 - `main-lua.py`
 

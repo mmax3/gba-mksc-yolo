@@ -2,17 +2,24 @@ import cv2 as cv2
 import numpy as np
 import os
 import time
+import sys
 import subprocess
-#import pyautogui
-#from PIL import Image
 from windowcapture import WindowCapture
 from yolov11.yolocore import YOLODetector
 from BHServer import BHServer
 
-print("YoloV11 ONNX with Lua server, custom code inference")
+# Add the Code directory to Python path to ensure imports work
+_code_dir = os.path.dirname(os.path.abspath(__file__))
+if _code_dir not in sys.path:
+    sys.path.insert(0, _code_dir)
+
+print("YoloV11 ONNX with Lua server, HTTP screenshot transfer")
+print("Uses BizHawk's comm.httpPostScreenshot() for screenshot capture")
+print("Server stores and provides screenshots to YOLO detector")
+print("If it doesn't run restart LUA script")
 
 # Initialize YOLOv11 object detector
-model_path = 'models/yolov11n.onnx'
+model_path = os.path.join(_code_dir, 'Models/yolov11n.onnx')
 yolov11_detector =  YOLODetector(model_path= model_path , conf_thresh=0.35, iou_thresh=0.6)
 # Change the working directory to the folder this script is in.
 
@@ -20,8 +27,8 @@ yolov11_detector =  YOLODetector(model_path= model_path , conf_thresh=0.35, iou_
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 mask1 = cv2.imread('mask4.jpg')
-
-loop_time = time.time()
+_cached_mask = None  # Cache for resized mask
+_cached_mask_shape = None
 
 # Start the TCP server
 server = BHServer(
@@ -43,92 +50,78 @@ server = BHServer(
 server.start()
 
 def update(self):
+    """Update game state and run YOLO detection."""
+    actions = self.actions  # Grab number of times update() has been called
     
-    """
-    if self.client_started():
-        print(self.actions)
-        print(self.screenshots[self.actions - 1].shape)
-    if self.controls["B"]:        # If B button is pressed prints all input states
-        pass
-        #print(self.controls)
-    """
-    actions = self.actions              # Grab number of times update() has been called
-    ss = self.screenshots[actions - 1]  # Grab the latest screenshot (numpy.ndarray)
-
-    #self.controls["A"] = True    # Press the A button on Player 1's controller, mode has to be other than "HUMAN"
-    """
-    x_type = self.data["x"][0]    # Get type of variable x: "INT". Set by client
-    x = self.data["x"][1]         # Get value of variable x: 512. Set by client
-    print(f"type:{x_type} value:{x}")
-    """
+    # Safely access the latest screenshot
+    if actions - 1 not in self.screenshots:
+        print(f"WARNING: Screenshot not available for action {actions - 1}")
+        return
     
-    """
-    if actions == 20:
-        self.save_screenshots(0, actions - 1, "my_screenshot")
-    elif actions == 40:
-        self.new_episode()      # Reset the emulator, actions = 0, ++episodes
-        if self.episodes == 3:  # Stop client after 3 episodes
-            self.exit_client()
-    """
-    global mask1
-    mask = mask1
+    ss = self.screenshots[actions - 1]  # Latest screenshot (numpy.ndarray)
     
+    # Scale screenshot if available from server
     if ss.shape != (0,):
-        #ak už server posiela screenshoty
         screenshot = scale_2x(ss)
     else:
-        #ak ešte nie tak snímame okno aplikácie
-        # get an updated image of the game
+        # Fallback: capture from window
         screenshot_raw = wincap.get_screenshot()
         screenshot = np.array(screenshot_raw)
     
-
-    if (mask.shape!=screenshot.shape): #480x320
-        print(f"Wrong screen size: {screenshot.shape}")
-        mask = cv2.resize(mask, (screenshot.shape[1], screenshot.shape[0]), interpolation = cv2.INTER_NEAREST)
-
-    screenshot_masked=cv2.bitwise_and(screenshot,mask,mask=None)
-                
-    # pre-process the image
-    #apply filter
-    #processed_image = vision.apply_hsv_filter(screenshot)
-    # do edge detection
-    #processed_image = vision.apply_edge_filter(processed_image)
- 
-    # Detect objects in the image
+    # Get or resize mask (cached for performance)
+    global _cached_mask, _cached_mask_shape, mask1
+    target_shape = (screenshot.shape[0], screenshot.shape[1])
+    
+    if _cached_mask_shape != target_shape:
+        if mask1.shape != (screenshot.shape[0], screenshot.shape[1]):
+            _cached_mask = cv2.resize(mask1, (screenshot.shape[1], screenshot.shape[0]), 
+                                     interpolation=cv2.INTER_NEAREST)
+        else:
+            _cached_mask = mask1
+        _cached_mask_shape = target_shape
+    
+    screenshot_masked = cv2.bitwise_and(screenshot, _cached_mask, mask=None)
+    
+    # Run YOLO detection
     boxes, scores, class_ids = yolov11_detector.detect(screenshot_masked)
     
-    class_ids_string = ",".join(f"{i+1}:{value}" for i, value in enumerate(class_ids))
-    scores_string = ",".join(f"{i+1}:{value}" for i, value in enumerate([int(score*100) for score in scores]))
- 
+    # Format detection results efficiently (vectorized)
+    if len(class_ids) > 0:
+        # Convert scores to percentages as integers
+        scores_int = (np.array(scores) * 100).astype(int)
+        # Create 1-indexed strings
+        class_ids_string = ",".join(f"{i+1}:{cid}" for i, cid in enumerate(class_ids))
+        scores_string = ",".join(f"{i+1}:{s}" for i, s in enumerate(scores_int))
+    else:
+        class_ids_string = ""
+        scores_string = ""
+    
+    # Send detection results back to Lua
     self.data = {
-        #"y": ("INT", "42"),
-        #"z": ("INT", "43"),
         "boxes": ("STRING[][]", [[int(coord/2) for coord in coordinates] for coordinates in boxes]),
         "scores": ("INT[]", scores_string),
         "class_ids": ("INT[]", class_ids_string)
     }
     
-    '''
-    # Draw prediction boxes to original screenshot
-    combined_img = yolov11_detector.draw_detections(screenshot, boxes, scores, class_ids)
-
-    
-    fps='{:.0f} fps'.format(1 / (time.time() - loop_time))
-    cv2.putText(combined_img, fps, (0, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
-    combined_img= cv2.cvtColor(combined_img, cv2.COLOR_BGR2RGB)
-    cv2.imshow('output',combined_img)
-    '''
-    # debug the loop rate
-    #print('FPS {}'.format(1 / (time.time() - loop_time)))
-    #loop_time = time.time()
-    
 
 def scale_2x(original_image):
-
-    int8_image = cv2.normalize(original_image, None, 255, 0, cv2.NORM_MINMAX, cv2.CV_8U)
-    scaled_image = cv2.resize(int8_image, (int8_image.shape[1]*2, int8_image.shape[0]*2), interpolation = cv2.INTER_NEAREST)
-    return(scaled_image)
+    """Scale image 2x using nearest neighbor interpolation.
+    
+    Args:
+        original_image: Input image (uint8 or other dtype)
+        
+    Returns:
+        Scaled image as uint8
+    """
+    # Convert to uint8 if needed
+    if original_image.dtype != np.uint8:
+        original_image = cv2.normalize(original_image, None, 255, 0, cv2.NORM_MINMAX, cv2.CV_8U)
+    
+    # Scale 2x with nearest neighbor
+    scaled = cv2.resize(original_image, 
+                       (original_image.shape[1] * 2, original_image.shape[0] * 2),
+                       interpolation=cv2.INTER_NEAREST)
+    return scaled
 
 # Replace the server's update function with ours
 BHServer.update = update
@@ -163,12 +156,11 @@ while (wincap==False):
         continue
 
 while(True):
-   
-    # press 'q' with the output window focused to exit.
-    # waits 1 ms every loop to process key presses
-    if cv2.waitKey(1) == ord('f'):
-        pass
-    elif cv2.waitKey(1) == ord('q'):
+    # Press 'q' to exit, 'f' for debug (calls waitKey once per loop)
+    key = cv2.waitKey(1)
+    if key == ord('q'):
         break
+    elif key == ord('f'):
+        pass  # Debug hook for future use
 
 print('Done.')

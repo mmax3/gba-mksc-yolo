@@ -4,21 +4,32 @@
 # Email: sihabsahariarcse@gmail.com
 # modified by me
 
-import argparse
 import os
 import sys
-import os.path as osp
 import cv2
 import numpy as np
 import onnxruntime as ort
 from math import exp
 
-#class_names = ['wario', 'toad', 'yoshi', 'tree', 'bowser', 'luigi', 'peach', 'donkey kong', 'power up', 'coin' ]
-class_names = list(map(lambda x: x.strip(), open('./classes.txt', 'r').readlines()))
+# Get the directory where this module is located
+_module_dir = os.path.dirname(os.path.abspath(__file__))
+# Get the Code directory (parent of yolo11)
+_code_dir = os.path.dirname(_module_dir)
+# Path to classes.txt in the Code directory
+_classes_path = os.path.join(_code_dir, 'classes.txt')
 
-# Create a list of colors for each class where each color is a tuple of 3 integer values
-rng = np.random.default_rng(3)
-colors = rng.uniform(0, 255, size=(len(class_names), 3))
+# Load class names once at module level
+if not os.path.exists(_classes_path):
+    raise FileNotFoundError(f"Classes file not found: {_classes_path}")
+
+with open(_classes_path, 'r') as f:
+    class_names = [line.strip() for line in f.readlines()]
+
+if not class_names:
+    raise ValueError("No class names found in classes.txt")
+
+# Colors will be generated lazily when needed
+_colors = None
 
 class DetectBox:
     def __init__(self, classId, score, xmin, ymin, xmax, ymax):
@@ -31,212 +42,362 @@ class DetectBox:
 
 
 class YOLODetector:
-    def __init__(self, model_path='./yolov11n-dynamic.onnx', conf_thresh=0.35, iou_thresh=0.45):
+    """YOLO object detector using ONNX Runtime.
+    
+    Attributes:
+        model_path (str): Path to ONNX model file
+        conf_thresh (float): Confidence threshold for detections (0.0-1.0)
+        iou_thresh (float): IoU threshold for NMS (0.0-1.0)
+        mask_alpha (float): Alpha value for visualization mask overlay
+    """
+    
+    def __init__(self, model_path='./yolov11n-dynamic.onnx', conf_thresh=0.35, iou_thresh=0.45, mask_alpha=0.3):
+        """Initialize YOLO detector.
+        
+        Args:
+            model_path (str): Path to ONNX model file
+            conf_thresh (float): Confidence threshold (default: 0.35)
+            iou_thresh (float): IoU threshold for NMS (default: 0.45)
+            mask_alpha (float): Alpha for visualization (default: 0.3)
+            
+        Raises:
+            FileNotFoundError: If model file doesn't exist
+            RuntimeError: If ONNX Runtime fails to load model
+        """
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Model file not found: {model_path}")
+        
         self.model_path = model_path
         self.conf_thresh = conf_thresh
         self.iou_thresh = iou_thresh
-        self.ort_session = ort.InferenceSession(self.model_path)
+        self.mask_alpha = mask_alpha
+        
+        try:
+            self.ort_session = ort.InferenceSession(self.model_path)
+        except Exception as e:
+            raise RuntimeError(f"Failed to load ONNX model: {str(e)}")
 
         # Get input information
-        self.input_details = self.ort_session.get_inputs()[0]  # First input tensor
+        if not self.ort_session.get_inputs():
+            raise RuntimeError("ONNX model has no input tensors")
+        
+        self.input_details = self.ort_session.get_inputs()[0]
         self.input_name = self.input_details.name
-        self.input_shape = self.input_details.shape  # Extract shape
+        self.input_shape = self.input_details.shape
 
         # Check which dimensions are dynamic (None or strings)
-        self.has_dynamic_shape = any(isinstance(dim, str) or dim is None for dim in self.input_details.shape)
+        self.has_dynamic_shape = any(isinstance(dim, str) or dim is None for dim in self.input_shape)
 
         if self.has_dynamic_shape:
-            print("Model has dynamic input, can accept various image sizes")
+            print("[YOLO] Model has dynamic input, accepts various image sizes")
             self.model_input_imgH = 0
             self.model_input_imgW = 0
-
         else:
-            print(f"Model accepts input shape: {self.input_shape}")
+            print(f"[YOLO] Model input shape: {self.input_shape}")
+            if len(self.input_shape) != 4:
+                raise ValueError(f"Expected 4D input shape, got {self.input_shape}")
             self.model_input_imgH = self.input_shape[2]
             self.model_input_imgW = self.input_shape[3]
 
     @staticmethod
     def sigmoid(x):
+        """Sigmoid activation function."""
         return 1 / (1 + exp(-x))
 
     @staticmethod
     def preprocess_image(img_src, resize_w, resize_h):
-        # if model is not exported with parameter dynamic=True, we need to change the size of the image,
-        # accordingly how the model was exported/trained
+        """Preprocess image for YOLO model input.
+        
+        Resizes image, normalizes to [0, 1], and transposes to (1, 3, H, W) format.
+        
+        Args:
+            img_src: Input image (HxWx3)
+            resize_w: Target width
+            resize_h: Target height
+            
+        Returns:
+            Preprocessed image in shape (1, 3, resize_h, resize_w)
+        """
         image = cv2.resize(img_src, (resize_w, resize_h), interpolation=cv2.INTER_LINEAR)
-        #yolo needs swapped B and R channels,
-	#but we do not needed, because it is already swapped when it comes here
-        #image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        image = image.astype(np.float32)
-        image /= 255.0
-        # image come in shape (320,480,3) and we need to change it to (1,3,320,480), that is the size of the models input layer
-        # (to see it, open model in Netron)
+        image = image.astype(np.float32) / 255.0
+        # Transpose from (H, W, 3) to (3, H, W) then add batch dimension (1, 3, H, W)
         image = image.transpose((2, 0, 1))
         image = np.expand_dims(image, axis=0)
         return image
 
     def iou(self, xmin1, ymin1, xmax1, ymax1, xmin2, ymin2, xmax2, ymax2):
+        """Calculate Intersection over Union (IoU) between two bounding boxes.
+        
+        Args:
+            Coordinates of two boxes in format (xmin, ymin, xmax, ymax)
+            
+        Returns:
+            float: IoU value between 0 and 1
+        """
         xmin = max(xmin1, xmin2)
         ymin = max(ymin1, ymin2)
         xmax = min(xmax1, xmax2)
         ymax = min(ymax1, ymax2)
 
-        innerWidth = max(0, xmax - xmin)
-        innerHeight = max(0, ymax - ymin)
-
-        innerArea = innerWidth * innerHeight
+        inner_width = max(0, xmax - xmin)
+        inner_height = max(0, ymax - ymin)
+        inner_area = inner_width * inner_height
+        
         area1 = (xmax1 - xmin1) * (ymax1 - ymin1)
         area2 = (xmax2 - xmin2) * (ymax2 - ymin2)
-        total = area1 + area2 - innerArea
+        union_area = area1 + area2 - inner_area
 
-        return innerArea / total
+        return inner_area / union_area if union_area > 0 else 0
 
-    def nms(self, detectResult):
-        predBoxs = []
+    def nms(self, detect_result):
+        """Apply Non-Maximum Suppression (NMS) to filter overlapping detections.
+        
+        Args:
+            detect_result: List of DetectBox objects
+            
+        Returns:
+            List of DetectBox objects after NMS filtering
+        """
+        if not detect_result or len(detect_result) <= 1:
+            return detect_result
         
         # Sort detections by confidence score (descending order)
-        sort_detectboxs = sorted(detectResult, key=lambda x: x.score, reverse=True)
-
-        for i in range(len(sort_detectboxs)):
-            if sort_detectboxs[i].classId == -1:
+        sort_boxes = sorted(detect_result, key=lambda x: x.score, reverse=True)
+        pred_boxes = []
+        
+        # Mark suppressed boxes by setting classId to -1 (faster than set tracking)
+        for i in range(len(sort_boxes)):
+            if sort_boxes[i].classId == -1:
                 continue  # Skip already suppressed boxes
             
-            predBoxs.append(sort_detectboxs[i])
-
-            # Check for duplicate class detections
-            for j in range(i + 1, len(sort_detectboxs)):
-                if sort_detectboxs[j].classId == -1:
-                    continue  # Skip already suppressed boxes
-
-                if sort_detectboxs[i].classId == sort_detectboxs[j].classId:
-                    iou = self.iou(
-                        sort_detectboxs[i].xmin, sort_detectboxs[i].ymin,
-                        sort_detectboxs[i].xmax, sort_detectboxs[i].ymax,
-                        sort_detectboxs[j].xmin, sort_detectboxs[j].ymin,
-                        sort_detectboxs[j].xmax, sort_detectboxs[j].ymax
+            pred_boxes.append(sort_boxes[i])
+            
+            # Suppress overlapping boxes of same class
+            for j in range(i + 1, len(sort_boxes)):
+                if sort_boxes[j].classId == -1:
+                    continue  # Skip already suppressed
+                
+                if sort_boxes[i].classId == sort_boxes[j].classId:
+                    iou_val = self.iou(
+                        sort_boxes[i].xmin, sort_boxes[i].ymin,
+                        sort_boxes[i].xmax, sort_boxes[i].ymax,
+                        sort_boxes[j].xmin, sort_boxes[j].ymin,
+                        sort_boxes[j].xmax, sort_boxes[j].ymax
                     )
                     
-                    if iou > self.iou_thresh:
-                        sort_detectboxs[j].classId = -1  # Suppress overlapping box
-
-        return predBoxs
+                    if iou_val > self.iou_thresh:
+                        sort_boxes[j].classId = -1
+        
+        return pred_boxes
 
     def postprocess(self, out, img_h, img_w):
-        # we get results in shape 1x3150x14
-        outputs = out[0]
-        # swap rows with columns
-        outputs = outputs.transpose()
-        # so now we have 3150 rows, each row is one detection
-        # and each row has 14 parameters
-        detectResult = []
-
+        """Postprocess YOLO model output to extract detections.
+        
+        Args:
+            out: Model output tensor from ONNX inference
+            img_h: Original image height
+            img_w: Original image width
+            
+        Returns:
+            List of DetectBox objects after NMS
+            
+        Raises:
+            ValueError: If output shape is invalid
+        """
+        if not out or len(out) == 0:
+            return []
+        
+        outputs = out[0]  # Get first output from ONNX session
+        
+        # Handle different output shapes efficiently
+        if outputs.ndim == 3:
+            # Shape: (1, channels, detections) - squeeze batch dimension
+            outputs = outputs.squeeze(0)
+        elif outputs.ndim != 2 and outputs.ndim != 3:
+            # Try to reshape for unexpected shapes
+            try:
+                outputs = outputs.reshape(-1, outputs.shape[-1])
+            except Exception as e:
+                raise ValueError(f"Cannot process output shape {outputs.shape}: {str(e)}")
+        
+        # Transpose only if needed (channels should be smaller than detections)
+        if outputs.ndim == 3 or (outputs.shape[0] < outputs.shape[1]):
+            outputs = outputs.transpose() if outputs.ndim == 2 else outputs.squeeze(0).transpose()
+        
+        detect_result = []
+        
+        # Calculate scale factors for coordinate conversion
         if not self.has_dynamic_shape:
             scale_h = img_h / self.model_input_imgH
             scale_w = img_w / self.model_input_imgW
         else:
-            scale_h = 1
-            scale_w = 1
-
-        for output in outputs:
-
-            bboxes = output[:4].squeeze() # first 4 parameters
-            confidences = output[4:].squeeze()  # rest 10 parameters
+            scale_h = 1.0
+            scale_w = 1.0
+        
+        # Vectorized processing: extract bboxes and confidences
+        bboxes = outputs[:, :4]
+        confidences = outputs[:, 4:]
+        
+        # Get max confidence and class for all detections at once
+        confs = np.max(confidences, axis=1)
+        class_ids = np.argmax(confidences, axis=1)
+        
+        # Create mask for detections above threshold
+        mask = confs > self.conf_thresh
+        
+        # Process only detections above threshold
+        valid_bboxes = bboxes[mask]
+        valid_confs = confs[mask]
+        valid_classes = class_ids[mask]
+        
+        for bbox, conf, class_id in zip(valid_bboxes, valid_confs, valid_classes):
+            # Convert from xywh to xyxy format
+            x1, y1, x2, y2 = self.xywh2xyxy(bbox)
             
-            conf = confidences.max()
-            if conf > self.conf_thresh:
-                classes_score = confidences
-                class_id = confidences.argmax()
-
-                bboxes = self.xywh2xyxy(bboxes)
-
-                x1,y1,x2,y2 = bboxes
-                
-                xmin = max(0, x1 * scale_w)
-                ymin = max(0, y1 * scale_h)
-                xmax = min(img_w, x2 * scale_w)
-                ymax = min(img_h, y2 * scale_h)
-
-                box = DetectBox(class_id, conf, xmin, ymin, xmax, ymax)
-                #box = DetectBox(class_id, conf, x1 * scale_w, y1 * scale_h, x2 * scale_w, y2 * scale_h)
-                detectResult.append(box)
-
-        predBox = self.nms(detectResult)
-        return predBox
+            # Scale coordinates and clip to image bounds
+            xmin = max(0, x1 * scale_w)
+            ymin = max(0, y1 * scale_h)
+            xmax = min(img_w, x2 * scale_w)
+            ymax = min(img_h, y2 * scale_h)
+            
+            box = DetectBox(class_id, conf, xmin, ymin, xmax, ymax)
+            detect_result.append(box)
+        
+        # Apply NMS to filter overlapping detections
+        pred_boxes = self.nms(detect_result)
+        return pred_boxes
 
     def detect(self, img_path):
-        if isinstance(img_path, str):
-            orig = cv2.imread(img_path)
-        else:
-            orig = img_path
-        input_imgH,input_imgW = orig.shape[:2]
-        # adjust image to fit the models input (1,3,320,480)
-        if self.has_dynamic_shape:
-            #print(input_imgH,input_imgW)
-            image = self.preprocess_image(orig, input_imgW, input_imgH)
-        else:
-            image = self.preprocess_image(orig, self.model_input_imgW, self.model_input_imgH)
-        # if not exported as dynamic and not trained differently, it has input dimensions [1,3,320,480],
-        # parameter at onnx export was imgsz=[320, 480]
-        pred_results = self.ort_session.run(None, {self.input_name: image})
-        predbox = self.postprocess(pred_results, input_imgH, input_imgW)
+        """Run object detection on an image.
+        
+        Args:
+            img_path: Either file path (str) or numpy array (HxWx3)
+            
+        Returns:
+            Tuple of (boxes, scores, class_ids) where:
+                - boxes: List of [x1, y1, x2, y2] coordinates
+                - scores: List of confidence scores
+                - class_ids: List of class IDs
+                
+        Raises:
+            ValueError: If image cannot be loaded or processed
+        """
+        try:
+            if isinstance(img_path, str):
+                orig = cv2.imread(img_path)
+                if orig is None:
+                    raise ValueError(f"Failed to load image: {img_path}")
+            else:
+                orig = img_path
+                if not isinstance(orig, np.ndarray):
+                    raise ValueError("Image must be numpy array or file path")
+            
+            input_imgH, input_imgW = orig.shape[:2]
+            
+            # Preprocess image to model input size
+            if self.has_dynamic_shape:
+                image = self.preprocess_image(orig, input_imgW, input_imgH)
+            else:
+                image = self.preprocess_image(orig, self.model_input_imgW, self.model_input_imgH)
+            
+            # Run inference
+            pred_results = self.ort_session.run(None, {self.input_name: image})
+            pred_boxes = self.postprocess(pred_results, input_imgH, input_imgW)
+            
+            # Extract boxes, scores, and class IDs
+            boxes = []
+            scores = []
+            class_ids = []
+            
+            for box in pred_boxes:
+                boxes.append([int(box.xmin), int(box.ymin), int(box.xmax), int(box.ymax)])
+                scores.append(float(box.score))
+                class_ids.append(int(box.classId))
+            
+            return boxes, scores, class_ids
+            
+        except Exception as e:
+            raise ValueError(f"Detection failed: {str(e)}")
 
-        boxes = []
-        scores = []
-        class_ids = []
 
-        for box in predbox:
-            boxes.append([int(box.xmin), int(box.ymin), int(box.xmax), int(box.ymax)])
-            scores.append(box.score)
-            class_ids.append(box.classId)
-
-        return boxes, scores, class_ids
-
-
-    def draw_detections(self, image, boxes, scores, class_ids, mask_alpha=0.3):
+    def _generate_colors(self):
+        """Generate random colors for each class (lazy initialization)."""
+        global _colors
+        if _colors is None:
+            rng = np.random.default_rng(3)
+            _colors = rng.uniform(0, 255, size=(len(class_names), 3)).astype(np.uint8)
+        return _colors
+    
+    def draw_detections(self, image, boxes, scores, class_ids, mask_alpha=None):
+        """Draw bounding boxes and labels on image.
+        
+        Args:
+            image: Input image (HxWx3)
+            boxes: List of [x1, y1, x2, y2] coordinates
+            scores: List of confidence scores
+            class_ids: List of class IDs
+            mask_alpha: Alpha blending value (uses instance default if None)
+            
+        Returns:
+            Image with drawn detections
+        """
+        if mask_alpha is None:
+            mask_alpha = self.mask_alpha
+        
+        if not boxes:
+            return image
+        
         mask_img = image.copy()
         det_img = image.copy()
-
+        colors = self._generate_colors()
+        
         img_height, img_width = image.shape[:2]
-        #size = min([img_height, img_width]) * 0.0006
-        size = min([img_height, img_width]) * 0.001
-        #text_thickness = int(min([img_height, img_width]) * 0.001)
+        font_scale = min([img_height, img_width]) * 0.001
         text_thickness = int(min([img_height, img_width]) * 0.002)
-
-        # Draw bounding boxes and labels of detections
+        
+        # Draw bounding boxes and labels for each detection
         for box, score, class_id in zip(boxes, scores, class_ids):
-            color = colors[class_id]
-
-            x1, y1, x2, y2 = box#.astype(int)
-
-            # Draw rectangle
+            if class_id < 0 or class_id >= len(class_names):
+                continue
+            
+            color = tuple(map(int, colors[class_id]))
+            x1, y1, x2, y2 = box
+            
+            # Draw bounding box
             cv2.rectangle(det_img, (x1, y1), (x2, y2), color, 2)
-
-            # Draw fill rectangle in mask image
             cv2.rectangle(mask_img, (x1, y1), (x2, y2), color, -1)
-
+            
+            # Create label
             label = class_names[class_id]
             caption = f'{label} {int(score * 100)}%'
-            (tw, th), _ = cv2.getTextSize(text=caption, fontFace=cv2.FONT_HERSHEY_SIMPLEX,
-                                          fontScale=size, thickness=text_thickness)
-            th = int(th * 1.2)
-
-            cv2.rectangle(det_img, (x1, y1),
-                          (x1 + tw, y1 - th), color, -1)
-            cv2.rectangle(mask_img, (x1, y1),
-                          (x1 + tw, y1 - th), color, -1)
+            (text_w, text_h), _ = cv2.getTextSize(
+                text=caption, fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+                fontScale=font_scale, thickness=text_thickness
+            )
+            text_h = int(text_h * 1.2)
+            
+            # Draw label background and text
+            cv2.rectangle(det_img, (x1, y1), (x1 + text_w, y1 - text_h), color, -1)
+            cv2.rectangle(mask_img, (x1, y1), (x1 + text_w, y1 - text_h), color, -1)
             cv2.putText(det_img, caption, (x1, y1),
-                        cv2.FONT_HERSHEY_SIMPLEX, size, (255, 255, 255), text_thickness, cv2.LINE_AA)
-
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), text_thickness, cv2.LINE_AA)
             cv2.putText(mask_img, caption, (x1, y1),
-                        cv2.FONT_HERSHEY_SIMPLEX, size, (255, 255, 255), text_thickness, cv2.LINE_AA)
-
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), text_thickness, cv2.LINE_AA)
+        
         return cv2.addWeighted(mask_img, mask_alpha, det_img, 1 - mask_alpha, 0)
     
-    def xywh2xyxy(self,x):
-        # Convert bounding box (x, y, w, h) to bounding box (x1, y1, x2, y2)
+    def xywh2xyxy(self, x):
+        """Convert bounding box from (x, y, w, h) to (x1, y1, x2, y2) format.
+        
+        Args:
+            x: Bounding box in xywh format
+            
+        Returns:
+            Bounding box in xyxy format
+        """
         y = np.copy(x)
-        y[..., 0] = x[..., 0] - x[..., 2] / 2
-        y[..., 1] = x[..., 1] - x[..., 3] / 2
-        y[..., 2] = x[..., 0] + x[..., 2] / 2
-        y[..., 3] = x[..., 1] + x[..., 3] / 2
+        y[..., 0] = x[..., 0] - x[..., 2] / 2  # x1 = center_x - w/2
+        y[..., 1] = x[..., 1] - x[..., 3] / 2  # y1 = center_y - h/2
+        y[..., 2] = x[..., 0] + x[..., 2] / 2  # x2 = center_x + w/2
+        y[..., 3] = x[..., 1] + x[..., 3] / 2  # y2 = center_y + h/2
         return y

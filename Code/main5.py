@@ -5,31 +5,27 @@ import sys
 import time
 import subprocess
 from windowcapture import WindowCapture
-from YOLOv7 import YOLOv7
-from YOLONAS import YOLONAS
-from vision import Vision
-from hsvfilter import HsvFilter
-from edgefilter import EdgeFilter
+from yolo26.yolo26 import YOLODetector
 
 # Add the Code directory to Python path to ensure imports work
 _code_dir = os.path.dirname(os.path.abspath(__file__))
 if _code_dir not in sys.path:
     sys.path.insert(0, _code_dir)
 
-print("Yolo v7 ONNX with screengrabber and custom inference code via onnxruntime")
+print("Yolo26 ONNX with framegrabber, custom code inference")
 
-# Initialize YOLOv7 object detector
-model_path = os.path.join(_code_dir, 'models/yolov7-tiny.onnx')
+# Initialize YOLO26 object detector
+model_path = os.path.join(_code_dir, 'Models/yolo26n.onnx')
 print(f"Loading YOLO model from: {model_path}")
 try:
-    yolo_detector = YOLOv7(model_path, conf_thres=0.35, iou_thres=0.65)
+    yolo26_detector =  YOLODetector(model_path= model_path , conf_thresh=0.35, iou_thresh=0.6)
     print("YOLO model loaded successfully")
 except Exception as e:
     print(f"Error loading YOLO model: {e}")
     raise
-#yolo_detector = YOLONAS("models/yolo_nas_s.onnx", conf_thres=0.25, iou_thres=0.65)
 
 # Change the working directory to the folder this script is in.
+# Doing this because I'll be putting the files from each video in their own folder on GitHub
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 #WindowCapture.list_window_names()
@@ -69,17 +65,6 @@ while (wincap==False):
         time.sleep(1.0)
         continue
 
-# initialize the Vision class
-print("Initializing Vision class...")
-vision = Vision()
-# initialize the trackbar window
-vision.init_control_gui()
-print("Vision class initialized")
-
-# HSV filter
-hsv_filter = HsvFilter(0, 180, 129, 15, 229, 243, 143, 0, 67, 0)
-edge_filter = EdgeFilter(kernelSize=1, erodeIter=1, dilateIter=1, canny1=100, canny2=200)
-
 print("Loading mask image...")
 mask = cv2.imread('mask4.jpg')
 if mask is None:
@@ -94,6 +79,7 @@ _cached_mask_shape = mask.shape
 print("Starting main loop...")
 loop_time = time.time()
 frame_count = 0
+
 while(True):
     frame_count += 1
     if frame_count == 1:
@@ -102,7 +88,7 @@ while(True):
     # get an updated image of the game
     try:
         screenshot_raw = wincap.get_screenshot()
-        screenshot = np.array(screenshot_raw)
+        screenshot = np.array(screenshot_raw)# už má prehodené RB kanály
     except Exception as e:
         print(f"Error capturing screenshot: {e}")
         time.sleep(0.1)
@@ -117,28 +103,29 @@ while(True):
     else:
         _cached_mask = mask
     
+    # apply mask
     screenshot_masked = cv2.bitwise_and(screenshot, _cached_mask, mask=None)
-        	
+    #cv2.imshow('input',screenshot_masked)
+    
     # pre-process the image
     #apply filter
-    processed_image = vision.apply_hsv_filter(screenshot)
+    #processed_image = vision.apply_hsv_filter(screenshot)
     # do edge detection
-    processed_image = vision.apply_edge_filter(processed_image)
- 
-    # Detect Objects
-    boxes, scores, class_ids = yolo_detector(screenshot_masked)
+    #processed_image = vision.apply_edge_filter(processed_image)
 
-    # Draw detections
-    combined_img = yolo_detector.draw_detections(processed_image)
-
-    # for PT model
-    #combined_img=yolov7_detector(screenshot)
-
+    # Detect objects in the image
+    boxes, scores, class_ids = yolo26_detector.detect(screenshot_masked)
+    # Draw prediction boxes to original screenshot
+    combined_img = yolo26_detector.draw_detections(screenshot, boxes, scores, class_ids)
+    # Calculate FPS
     fps='{:.0f} fps'.format(1 / (time.time() - loop_time))
+    # Draw FPS to image
     cv2.putText(combined_img, fps, (0, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
+    # Swap RB channels back
     combined_img= cv2.cvtColor(combined_img, cv2.COLOR_BGR2RGB)
+    # Show output
     cv2.imshow('output',combined_img)
-
+    
     # debug the loop rate
     #print('FPS {}'.format(1 / (time.time() - loop_time)))
     loop_time = time.time()

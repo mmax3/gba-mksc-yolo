@@ -1,8 +1,16 @@
 import numpy as np
 import cv2
+import os
 
-#class_names = ['wario', 'toad', 'yoshi', 'tree', 'bowser', 'luigi', 'peach', 'donkey kong', 'power up', 'coin' ]
-class_names = list(map(lambda x: x.strip(), open('./classes.txt', 'r').readlines()))
+# Load class names from absolute path
+_utils_dir = os.path.dirname(os.path.abspath(__file__))
+_code_dir = os.path.dirname(_utils_dir)
+_classes_file = os.path.join(_code_dir, 'classes.txt')
+
+if not os.path.exists(_classes_file):
+    raise FileNotFoundError(f"classes.txt not found at {_classes_file}")
+
+class_names = list(map(lambda x: x.strip(), open(_classes_file, 'r').readlines()))
 #print(class_names)
 
 # Create a list of colors for each class where each color is a tuple of 3 integer values
@@ -11,72 +19,122 @@ colors = rng.uniform(0, 255, size=(len(class_names), 3))
 
 
 def nms(boxes, scores, iou_threshold):
-    # Sort by score
+    """Non-Maximum Suppression with optimized vectorized operations.
+    
+    Args:
+        boxes: Array of bounding boxes (N, 4)
+        scores: Array of confidence scores (N,)
+        iou_threshold: IoU threshold for suppression
+        
+    Returns:
+        List of indices to keep
+    """
+    if len(boxes) == 0:
+        return []
+    
+    # Sort by score (descending)
     sorted_indices = np.argsort(scores)[::-1]
-
     keep_boxes = []
-    while sorted_indices.size > 0:
-        # Pick the last box
+    
+    while len(sorted_indices) > 0:
+        # Pick the box with highest score
         box_id = sorted_indices[0]
         keep_boxes.append(box_id)
-
-        # Compute IoU of the picked box with the rest
+        
+        if len(sorted_indices) == 1:
+            break
+        
+        # Compute IoU of the picked box with the rest (vectorized)
         ious = compute_iou(boxes[box_id, :], boxes[sorted_indices[1:], :])
-
-        # Remove boxes with IoU over the threshold
+        
+        # Keep only boxes with IoU below threshold
         keep_indices = np.where(ious < iou_threshold)[0]
-
-        # print(keep_indices.shape, sorted_indices.shape)
         sorted_indices = sorted_indices[keep_indices + 1]
-
+    
     return keep_boxes
 
 
 def compute_iou(box, boxes):
-    # Compute xmin, ymin, xmax, ymax for both boxes
+    """Compute Intersection over Union (IoU) - fully vectorized.
+    
+    Args:
+        box: Single bounding box (4,)
+        boxes: Array of bounding boxes (N, 4)
+        
+    Returns:
+        Array of IoU values (N,)
+    """
+    # Vectorized computation - all at once
     xmin = np.maximum(box[0], boxes[:, 0])
     ymin = np.maximum(box[1], boxes[:, 1])
     xmax = np.minimum(box[2], boxes[:, 2])
     ymax = np.minimum(box[3], boxes[:, 3])
 
-    # Compute intersection area
+    # Intersection area
     intersection_area = np.maximum(0, xmax - xmin) * np.maximum(0, ymax - ymin)
 
-    # Compute union area
+    # Union area
     box_area = (box[2] - box[0]) * (box[3] - box[1])
     boxes_area = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
     union_area = box_area + boxes_area - intersection_area
 
-    # Compute IoU
-    iou = intersection_area / union_area
-
-    return iou
+    # Avoid division by zero
+    return intersection_area / np.maximum(union_area, 1e-8)
 
 
 def xywh2xyxy(x):
-    # Convert bounding box (x, y, w, h) to bounding box (x1, y1, x2, y2)
-    y = np.copy(x)
-    y[..., 0] = x[..., 0] - x[..., 2] / 2
-    y[..., 1] = x[..., 1] - x[..., 3] / 2
-    y[..., 2] = x[..., 0] + x[..., 2] / 2
-    y[..., 3] = x[..., 1] + x[..., 3] / 2
+    """Convert bounding box format (x, y, w, h) to (x1, y1, x2, y2) - optimized.
+    
+    Args:
+        x: Bounding boxes in (x, y, w, h) format
+        
+    Returns:
+        Bounding boxes in (x1, y1, x2, y2) format
+    """
+    y = np.empty_like(x)  # Pre-allocate instead of copy
+    y[..., 0] = x[..., 0] - x[..., 2] * 0.5  # x1 = x - w/2 (multiplication faster than division)
+    y[..., 1] = x[..., 1] - x[..., 3] * 0.5  # y1 = y - h/2
+    y[..., 2] = x[..., 0] + x[..., 2] * 0.5  # x2 = x + w/2
+    y[..., 3] = x[..., 1] + x[..., 3] * 0.5  # y2 = y + h/2
     return y
 
 def draw_detections(image, boxes, scores, class_ids, mask_alpha=0.3):
+    """Draw bounding boxes and labels on image with optimized rendering.
+    
+    Args:
+        image: Input image (H, W, C)
+        boxes: List of bounding boxes
+        scores: List of confidence scores
+        class_ids: List of class IDs
+        mask_alpha: Alpha transparency for overlay
+        
+    Returns:
+        Image with drawn detections
+    """
+    if len(boxes) == 0:
+        return image
+    
     mask_img = image.copy()
     det_img = image.copy()
 
     img_height, img_width = image.shape[:2]
-    #size = min([img_height, img_width]) * 0.0006
     size = min([img_height, img_width]) * 0.001
-    #text_thickness = int(min([img_height, img_width]) * 0.001)
     text_thickness = int(min([img_height, img_width]) * 0.002)
 
     # Draw bounding boxes and labels of detections
     for box, score, class_id in zip(boxes, scores, class_ids):
-        color = colors[class_id]
-
+        class_id = int(class_id)
+        
+        # Bounds check
+        if class_id < 0 or class_id >= len(colors):
+            continue
+        
+        color = tuple(map(int, colors[class_id]))
         x1, y1, x2, y2 = box.astype(int)
+        
+        # Bounds clipping
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(img_width, x2), min(img_height, y2)
 
         # Draw rectangle
         cv2.rectangle(det_img, (x1, y1), (x2, y2), color, 2)
@@ -90,13 +148,13 @@ def draw_detections(image, boxes, scores, class_ids, mask_alpha=0.3):
                                       fontScale=size, thickness=text_thickness)
         th = int(th * 1.2)
 
-        cv2.rectangle(det_img, (x1, y1),
-                      (x1 + tw, y1 - th), color, -1)
-        cv2.rectangle(mask_img, (x1, y1),
-                      (x1 + tw, y1 - th), color, -1)
+        # Draw label background
+        cv2.rectangle(det_img, (x1, y1), (x1 + tw, y1 - th), color, -1)
+        cv2.rectangle(mask_img, (x1, y1), (x1 + tw, y1 - th), color, -1)
+        
+        # Draw label text
         cv2.putText(det_img, caption, (x1, y1),
                     cv2.FONT_HERSHEY_SIMPLEX, size, (255, 255, 255), text_thickness, cv2.LINE_AA)
-
         cv2.putText(mask_img, caption, (x1, y1),
                     cv2.FONT_HERSHEY_SIMPLEX, size, (255, 255, 255), text_thickness, cv2.LINE_AA)
 
